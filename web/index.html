@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gd-browser — Geometry Dash in WebAssembly</title>
+<style>
+  :root {
+    --bg: #0d0e16;
+    --panel: #161826;
+    --panel2: #1d2033;
+    --text: #e8e9f2;
+    --dim: #8b8fa8;
+    --accent: #ff2d8c;
+    --accent2: #3cd2ff;
+    --ok: #50ff90;
+    font-size: 16px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.55rem 1rem;
+    background: var(--panel);
+    border-bottom: 1px solid #262a42;
+    flex: none;
+  }
+  header h1 { font-size: 1.05rem; font-weight: 700; letter-spacing: 0.02em; }
+  header h1 span { color: var(--accent); }
+  #hud {
+    display: flex;
+    gap: 1.25rem;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    color: var(--dim);
+    font-size: 0.85rem;
+    white-space: nowrap;
+  }
+  #hud b { color: var(--text); font-weight: 600; }
+  #mode-badge {
+    padding: 0.1rem 0.6rem;
+    border-radius: 999px;
+    background: var(--panel2);
+    color: var(--accent2);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+  main { flex: 1; display: flex; min-height: 0; }
+  #stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      radial-gradient(1200px 600px at 30% -10%, #1a1d30 0%, transparent 60%),
+      var(--bg);
+    position: relative;
+    min-width: 0;
+  }
+  #wrap { position: relative; max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9; }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    border-radius: 6px;
+    box-shadow: 0 12px 60px rgba(0, 0, 0, 0.55);
+    cursor: pointer;
+    touch-action: none;
+  }
+  #toast {
+    position: absolute;
+    left: 50%;
+    bottom: 4%;
+    transform: translateX(-50%);
+    background: rgba(13, 14, 22, 0.92);
+    border: 1px solid #2c3050;
+    padding: 0.5rem 1.1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s;
+    max-width: 80%;
+    text-align: center;
+  }
+  #toast.show { opacity: 1; }
+  aside {
+    width: 15.5rem;
+    flex: none;
+    background: var(--panel);
+    border-left: 1px solid #262a42;
+    display: flex;
+    flex-direction: column;
+    padding: 0.75rem;
+    gap: 0.75rem;
+    overflow-y: auto;
+  }
+  aside h2 {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--dim);
+    margin-bottom: 0.25rem;
+  }
+  #levels { display: flex; flex-direction: column; gap: 0.3rem; }
+  #levels button {
+    text-align: left;
+    background: var(--panel2);
+    color: var(--text);
+    border: 1px solid transparent;
+    padding: 0.5rem 0.65rem;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+  #levels button:hover { border-color: var(--accent2); }
+  #levels button.active { border-color: var(--accent); background: #241a2b; }
+  #levels button small { color: var(--dim); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+  .btnrow { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .btnrow button, .btnrow label {
+    flex: 1;
+    background: var(--panel2);
+    color: var(--text);
+    border: 1px solid #2c3050;
+    border-radius: 7px;
+    padding: 0.45rem 0.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .btnrow button:hover, .btnrow label:hover { border-color: var(--accent2); }
+  #solve-state { font-size: 0.78rem; color: var(--dim); min-height: 1.1em; font-variant-numeric: tabular-nums; }
+  #keys { font-size: 0.75rem; color: var(--dim); line-height: 1.55; }
+  #keys kbd {
+    background: var(--panel2);
+    border: 1px solid #2c3050;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0 0.3em;
+    font-family: inherit;
+    font-size: 0.9em;
+    color: var(--text);
+  }
+  #art-note { font-size: 0.78rem; color: var(--dim); line-height: 1.5; }
+  #art-note b { color: var(--ok); }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.9rem;
+    background: rgba(10, 11, 18, 0.94);
+    z-index: 10;
+    transition: opacity 0.3s;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h3 { font-size: 1.1rem; font-weight: 600; }
+  #overlay .sub { color: var(--dim); font-size: 0.85rem; }
+  #bar {
+    width: min(24rem, 70%);
+    height: 0.55rem;
+    background: var(--panel2);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  #bar > div {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 999px;
+    transition: width 0.15s;
+  }
+  #overlay .spin {
+    width: 2.6rem;
+    height: 2.6rem;
+    border-radius: 50%;
+    border: 3px solid var(--panel2);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 860px) {
+    aside { width: 12rem; }
+    #hud { gap: 0.6rem; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>gd<span>-</span>browser</h1>
+  <span id="mode-badge">BOOT</span>
+  <div id="hud">
+    <div>level <b id="hud-name">—</b></div>
+    <div>attempt <b id="hud-attempt">0</b></div>
+    <div><b id="hud-progress">0.00</b>%</div>
+    <div>miss/click <b id="hud-miss">—</b></div>
+  </div>
+</header>
+<main>
+  <div id="stage">
+    <div id="wrap">
+      <canvas id="c" width="1280" height="720"></canvas>
+      <div id="toast"></div>
+      <div id="overlay">
+        <div class="spin" id="ov-spin"></div>
+        <h3 id="ov-title">loading engine…</h3>
+        <div class="sub" id="ov-sub">compiling wasm</div>
+        <div id="bar"><div></div></div>
+      </div>
+    </div>
+  </div>
+  <aside>
+    <div>
+      <h2>Levels</h2>
+      <div id="levels"></div>
+    </div>
+    <div>
+      <h2>Play</h2>
+      <div class="btnrow">
+        <button id="btn-mode" title="T">Auto ⇄ Manual</button>
+        <button id="btn-restart" title="R">Restart</button>
+        <button id="btn-solve" title="solve this level in a worker">Solve</button>
+      </div>
+      <div id="solve-state"></div>
+    </div>
+    <div>
+      <h2>Game art</h2>
+      <p id="art-note"></p>
+      <div class="btnrow">
+        <label>
+          load GD folder
+          <input id="art-picker" type="file" webkitdirectory multiple hidden>
+        </label>
+      </div>
+    </div>
+    <div>
+      <h2>Controls</h2>
+      <p id="keys">
+        <kbd>Space</kbd> / <kbd>↑</kbd> / <kbd>W</kbd> / click — jump (Manual)<br>
+        <kbd>T</kbd> — auto ⇄ manual &nbsp; <kbd>R</kbd> — restart<br>
+        deaths restart, like the game.
+      </p>
+    </div>
+  </aside>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

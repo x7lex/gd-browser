@@ -1,0 +1,55 @@
+# The browser build: packs dist/ (wasm engine, levels, macros, songs) and
+# publishes it to GitHub Pages, where it runs without any install. No game
+# art is bundled (RobTop's), so the hosted build renders hitbox outlines;
+# the page's folder picker loads the player's own GD art at runtime.
+name: web
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: wasm-pack
+        run: |
+          if ! command -v wasm-pack >/dev/null; then
+            curl -sSL https://github.com/rustwasm/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz \
+              | tar xz --strip-components=1 -C "$HOME/.cargo/bin"
+          fi
+      - name: Levels + songs + macros (fresh checkout has none)
+        run: |
+          for id in 149992717 119550490 127323087 148598469 10565740 128; do
+            python3 -I tools/fetch_level.py $id || echo "level $id unavailable"
+          done
+      - name: Pack
+        run: python3 tools/web_pack.py
+      - name: Smoke test (headless)
+        run: node web/smoke.mjs
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

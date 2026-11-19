@@ -3,6 +3,11 @@
 A Geometry Dash engine in Rust: 240 Hz physics, a CPU renderer that matches the
 real game's look, and a bot that solves levels on its own.
 
+**gd-browser** (see [web/](web/) and [tools/web_pack.py](tools/web_pack.py)):
+the same engine compiled to WebAssembly, playable in the browser — levels from
+`levels/`, the bot's own solve for levels without a recording, game art from
+your own GD install.
+
 ## Install
 
 Download a package from **Releases** (Linux, macOS, Windows), unpack it and run `demo`.
@@ -38,6 +43,39 @@ solve, which is cached in `macros/<id>.auto.json`.
 
 You can also type a level ID in the terminal to queue it: it loads in the background.
 
+## Browser (gd-browser)
+
+```sh
+python3 tools/web_pack.py --serve   # builds dist/ and serves http://localhost:8000
+```
+
+The same engine as WebAssembly (`wasm-pack build --release --target web`), the
+same behavior: 240 Hz sim ticks from wall clock, deaths restart the attempt,
+recorded macros play with their frame fixes, and a level without a recording
+gets the bot's own solve — in a Web Worker, with a progress readout, then
+replays automatically. Manual mode is always one keypress away.
+
+| Key | Action |
+|---|---|
+| Space / ↑ / W / click / touch | jump (Manual mode) |
+| T | auto ⇄ manual |
+| R | restart |
+| `#<level id>` in the URL | open a specific level |
+
+Songs play through Web Audio at the sim's song cue (level offset, song
+triggers), restarted at the exact sample like the native demo; GD's death
+sound plays when it is among the art.
+
+**Game art**: nothing of RobTop's is bundled, here or natively. When the
+packer finds a Geometry Dash install (`DEMO_ASSETS`, `assets/`, or the
+remembered folder) the needed sheets are copied into `dist/assets/` and the
+page loads them with a progress bar. Otherwise levels render as hitbox
+outlines, and the page's *load GD folder* picker reads the art from your own
+install at runtime — matched by name, never uploaded anywhere.
+
+`node web/smoke.mjs` runs the whole wasm stack headlessly (boot, GRIEF +
+macro replay, render, deaths, manual, solve → set_macro → 100%).
+
 ## Other tools
 
 | Binary | Purpose |
@@ -47,6 +85,7 @@ You can also type a level ID in the terminal to queue it: it loads in the backgr
 | `frame <tick>` | render one frame to PNG; `FRAME_SWEEP=n` times n frames |
 | `fidelity`, `truth`, `autocheck` | compare the sim against real GD recordings |
 | `rig` | hand-driven test level with every orb, pad and portal |
+| `web_index` | the browser build's manifests (levels.json / assets.json) |
 
 ## Layout
 
@@ -55,6 +94,7 @@ src/sim/      physics, collisions, triggers
 src/render/   renderer (sprite atlas, effects, shaders)
 src/bot/      macro parsing (.gdr2) and the beam-search solver
 src/level/    level string parser
+src/web/      the wasm-bindgen API the browser app drives
 data/         object table (ids, hitboxes, sprites)
 ```
 
