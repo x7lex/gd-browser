@@ -88,36 +88,43 @@ pub fn solve(level: &Level, table: &ObjectTable, mut progress: impl FnMut(f64)) 
         let jobs: Vec<(usize, usize)> = (0..beam.len()).flat_map(|c| (0..acts.len()).map(move |a| (c, a))).collect();
         let chunk = jobs.len().div_ceil(threads).max(1);
         let beam_ref = &beam;
-        let grown: Vec<Option<Cand>> = std::thread::scope(|sc| {
-            let hs: Vec<_> = jobs
-                .chunks(chunk)
-                .map(|js| {
-                    sc.spawn(move || {
-                        js.iter()
-                            .map(|&(c, a)| {
-                                let mut sim = beam_ref[c].sim.clone();
-                                let act = acts[a];
-                                for _ in 0..D {
-                                    sim.step_single(InputState { hold: act.0, hold_p2: act.1 });
-                                    if sim.state == RunState::Dead {
-                                        if trace {
-                                            let p = &sim.players[0];
-                                            eprintln!("  dies x {:.0} y {:.0} act {act:?} killer {:?} {:?} flip {} vy {:.1}", p.x, p.y, sim.killer, p.mode, p.grav_flip, p.vel_y);
-                                        }
-                                        return None;
-                                    }
-                                    if finished(&sim) {
-                                        break;
-                                    }
-                                }
-                                Some(Cand { sim, node: usize::MAX, changes: a as u32 })
-                            })
-                            .collect::<Vec<_>>()
-                    })
+        // wasm has no spawnable threads: grow the beam inline
+        let grow = |js: &[(usize, usize)]| {
+            js.iter()
+                .map(|&(c, a)| {
+                    let mut sim = beam_ref[c].sim.clone();
+                    let act = acts[a];
+                    for _ in 0..D {
+                        sim.step_single(InputState { hold: act.0, hold_p2: act.1 });
+                        if sim.state == RunState::Dead {
+                            if trace {
+                                let p = &sim.players[0];
+                                eprintln!("  dies x {:.0} y {:.0} act {act:?} killer {:?} {:?} flip {} vy {:.1}", p.x, p.y, sim.killer, p.mode, p.grav_flip, p.vel_y);
+                            }
+                            return None;
+                        }
+                        if finished(&sim) {
+                            break;
+                        }
+                    }
+                    Some(Cand { sim, node: usize::MAX, changes: a as u32 })
                 })
-                .collect();
-            hs.into_iter().flat_map(|h| h.join().expect("solver thread")).collect()
-        });
+                .collect::<Vec<_>>()
+        };
+        let grown: Vec<Option<Cand>> = if cfg!(target_family = "wasm") {
+            jobs.chunks(chunk).flat_map(grow).collect()
+        } else {
+            std::thread::scope(|sc| {
+                let hs: Vec<_> = jobs
+                    .chunks(chunk)
+                    .map(|js| {
+                        let grow = grow;
+                        sc.spawn(move || grow(js))
+                    })
+                    .collect();
+                hs.into_iter().flat_map(|h| h.join().expect("solver thread")).collect()
+            })
+        };
         // attach tree nodes, merge near-identical states (keep fewest changes)
         if trace {
             let ys: Vec<i64> = beam.iter().map(|c| c.sim.players[0].y as i64).collect();
@@ -316,6 +323,18 @@ pub fn macro_for(
     if let Ok(json) = serde_json::to_vec(&m) {
         let _ = std::fs::write(&cache, json);
     }
+    Ok(m)
+}
+
+/// The post-solve steps of `macro_for` — verify on a fresh sim, prune the
+/// clicks the run does not need, find the sway windows — without the
+/// macros/ cache (the browser build has no filesystem).
+pub fn finish(level: &Level, table: &ObjectTable, m: Macro) -> Result<Macro, Macro> {
+    if !replays(level, table, &m) {
+        return Err(m);
+    }
+    let mut m = prune(level, table, m);
+    m.sway = find_sway(level, table, &m);
     Ok(m)
 }
 

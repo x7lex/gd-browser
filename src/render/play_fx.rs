@@ -6,6 +6,7 @@
 //! Everything is derived from `Sim` state, so skipped frames do not matter.
 
 use super::fx::{self, Emitter, Particles};
+use crate::assets::Assets;
 use crate::level::Level;
 use crate::sim::objects::ObjectKind as K;
 use crate::sim::player::{GameMode, Player};
@@ -13,26 +14,28 @@ use crate::sim::{RunState, Sim};
 use std::collections::HashMap;
 
 /// Emitter plists loaded from the GD resources folder.
-const EFFECTS: &[&str] = &[
-    "dragEffect",
-    "shipDragEffect",
-    "landEffect",
-    "dashEffect",
-    "swingBurstEffect",
-    "portalEffect01",
-    "portalEffect02",
-    "ringEffect",
-    "bumpEffect",
-    "explodeEffect",
-    "firework",
-    "coinPickupEffect",
-    "endEffectPortal",
-    "speedEffect_slow",
-    "speedEffect_normal",
-    "speedEffect_fast",
-    "speedEffect_vfast",
-    "speedEffect_vvfast",
-];
+pub fn effect_names() -> &'static [&'static str] {
+    &[
+        "dragEffect",
+        "shipDragEffect",
+        "landEffect",
+        "dashEffect",
+        "swingBurstEffect",
+        "portalEffect01",
+        "portalEffect02",
+        "ringEffect",
+        "bumpEffect",
+        "explodeEffect",
+        "firework",
+        "coinPickupEffect",
+        "endEffectPortal",
+        "speedEffect_slow",
+        "speedEffect_normal",
+        "speedEffect_fast",
+        "speedEffect_vfast",
+        "speedEffect_vvfast",
+    ]
+}
 
 /// Is a level object visible in game: not hidden (key 135) and not faded
 /// out by alpha triggers. Invisible objects keep working but show no effects.
@@ -79,9 +82,9 @@ pub struct Gfx {
 }
 
 impl Gfx {
-    pub fn load(dir: &std::path::Path) -> Gfx {
-        let read = |n: &str| std::fs::read_to_string(dir.join(n)).ok();
-        let em = EFFECTS
+    pub fn load(assets: &Assets) -> Gfx {
+        let read = |n: &str| assets.text(n);
+        let em = effect_names()
             .iter()
             .filter_map(|&n| Some((n, Emitter::from_plist(&fx::parse_plist(&read(&format!("{n}.plist"))?)?))))
             .collect();
@@ -106,7 +109,7 @@ impl Gfx {
             fire,
             robot: read("Robot_AnimDesc.plist").and_then(|t| fx::parse_anims(&t)),
             spider: read("Spider_AnimDesc.plist").and_then(|t| fx::parse_anims(&t)),
-            font: fx::Font::load(&dir.join("bigFont-uhd.fnt")),
+            font: fx::Font::load(assets, "bigFont-uhd.fnt"),
         }
     }
 

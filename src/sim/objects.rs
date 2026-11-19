@@ -123,7 +123,13 @@ pub struct ObjectTable {
 impl ObjectTable {
     pub fn load(path: &std::path::Path) -> Result<ObjectTable, String> {
         let f = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&f).map_err(|e| e.to_string())
+        ObjectTable::from_str(&f)
+    }
+
+    /// The object table straight from `data/objects.json`'s text (the
+    /// browser build, which fetches the file itself).
+    pub fn from_str(f: &str) -> Result<ObjectTable, String> {
+        serde_json::from_str(f).map_err(|e| e.to_string())
     }
 
     fn kind_of(&self, id: u16) -> ObjectKind {

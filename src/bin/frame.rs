@@ -38,8 +38,8 @@ fn main() {
             m
         })
     };
-    let assets = gdrust::assets::find_or_ask();
-    let mut r = Renderer::new(std::path::Path::new(&assets));
+    let assets = gdrust::assets::Assets::fs(std::path::Path::new(&gdrust::assets::find_or_ask()));
+    let mut r = Renderer::new(&assets);
 
     let mut sim = Sim::new(&level, &table);
     // follow the recorded real path (frame fixes) unless FRAME_PURE is set

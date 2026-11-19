@@ -9,3 +9,6 @@ assets/
 analysis/
 dist/
 __pycache__/
+Resources/
+.DS_Store
+assets

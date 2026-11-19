@@ -3,19 +3,31 @@ name = "gdrust"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+# cdylib: the browser build (src/web, wasm-pack); rlib: bins and tests
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
-minifb = "0.27"
 tiny-skia = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 rayon = "1"
+
+# browser glue (src/web)
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+# native: window + audio
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+minifb = "0.27"
 rodio = "0.20"
+
+# native folder picker on first run (Windows uses Steam's default path)
+[target.'cfg(all(not(windows), not(target_family = "wasm")))'.dependencies]
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 
 [profile.release]
 opt-level = 3
 lto = true
-
-# native folder picker on first run (Windows uses Steam's default path)
-[target.'cfg(not(windows))'.dependencies]
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }

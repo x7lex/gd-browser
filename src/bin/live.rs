@@ -149,7 +149,7 @@ fn main() {
         .expect("gdr2 parse");
     // GRIEF = Newgrounds 482872 (tools/fetch_songs.sh); song offset kA13 = 0
     let song = decode_song(&root.join("audio/482872.mp3"));
-    let mut renderer = Renderer::new(Path::new(&assets));
+    let mut renderer = Renderer::new(&gdrust::assets::Assets::fs(Path::new(&assets)));
     // GD sound effects: death and level complete (missing files = silent)
     let res = Path::new(&assets).join("Resources");
     let res = if res.is_dir() { res } else { PathBuf::from(&assets) };

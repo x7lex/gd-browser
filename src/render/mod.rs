@@ -3,9 +3,10 @@
 
 pub mod atlas;
 pub mod fx;
-mod play_fx;
+pub(crate) mod play_fx;
 mod shader;
 
+use crate::assets::Assets;
 use crate::level::object::GdObject;
 use crate::level::Level;
 use crate::sim::objects::{sim_object, ObjectTable};
@@ -76,7 +77,9 @@ pub struct Renderer {
     /// sprites still off the canvas build here, so the frame they enter
     /// range in (400u ahead) does not stall: keys in flight, results
     ahead: (crate::sim::fx::HashSet<SpriteKey>, std::sync::mpsc::Sender<(SpriteKey, Option<Sprite>)>, std::sync::mpsc::Receiver<(SpriteKey, Option<Sprite>)>),
-    ahead_pool: rayon::ThreadPool,
+    /// the pool `ahead` builds on; None on wasm (no spawnable threads
+    /// there): misses build in-frame instead
+    ahead_pool: Option<rayon::ThreadPool>,
     /// counter labels (1615) per level uid, orbs per sim grid: found once,
     /// not by scanning every object each frame (GRIEF has 190k)
     counters: (u64, Vec<usize>),
@@ -514,9 +517,11 @@ fn blend_scalar(sp: &[u8], dp: &mut [u8], f: [u32; 4], add: bool) {
 }
 
 /// Prescale `key` on the background pool (once: `inflight` holds queued
-/// keys); the result reaches the cache at the next frame's drain.
+/// keys); the result reaches the cache at the next frame's drain. On wasm
+/// there is no pool: nothing is prefetched, and misses build in-frame
+/// (build_sprites) instead.
 fn build_ahead(
-    pool: &rayon::ThreadPool,
+    pool: &Option<rayon::ThreadPool>,
     inflight: &mut crate::sim::fx::HashSet<SpriteKey>,
     tx: &std::sync::mpsc::Sender<(SpriteKey, Option<Sprite>)>,
     src: &std::sync::Arc<Pixmap>,
@@ -525,13 +530,15 @@ fn build_ahead(
     if !inflight.insert(key.clone()) {
         return;
     }
-    let (src, tx) = (src.clone(), tx.clone());
-    pool.spawn(move || {
-        let (kx, ky) = (f32::from_bits((key.4 >> 32) as u32), f32::from_bits(key.4 as u32));
-        let sp = prescale(&src, key.1 as f32 / 1000.0, key.2, key.3, kx, ky)
-            .map(|(p, ox, oy)| std::sync::Arc::new({ let spans = opaque_spans(&p); (p, ox, oy, spans) }));
-        let _ = tx.send((key, sp));
-    });
+    if let Some(pool) = pool {
+        let (src, tx) = (src.clone(), tx.clone());
+        pool.spawn(move || {
+            let (kx, ky) = (f32::from_bits((key.4 >> 32) as u32), f32::from_bits(key.4 as u32));
+            let sp = prescale(&src, key.1 as f32 / 1000.0, key.2, key.3, kx, ky)
+                .map(|(p, ox, oy)| std::sync::Arc::new({ let spans = opaque_spans(&p); (p, ox, oy, spans) }));
+            let _ = tx.send((key, sp));
+        });
+    }
 }
 
 thread_local!(static BUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
@@ -576,28 +583,36 @@ fn build_sprites(
     }
     let store = &*store;
     let chunk = keys.len().div_ceil(16).max(1);
-    let built: Vec<Vec<Option<Sprite>>> = std::thread::scope(|sc| {
-        let hs: Vec<_> = keys
-            .chunks(chunk)
-            .map(|ks| {
-                sc.spawn(move || {
-                    ks.iter()
-                        .map(|(tex, rot, fx, fy, k)| {
-                            let (kx, ky) = (f32::from_bits((k >> 32) as u32), f32::from_bits(*k as u32));
-                            store
-                                .cached(tex)
-                                .and_then(|sp| prescale(sp, *rot as f32 / 1000.0, *fx, *fy, kx, ky))
-                                .map(|(p, ox, oy)| {
-                                    let spans = opaque_spans(&p);
-                                    std::sync::Arc::new((p, ox, oy, spans))
-                                })
-                        })
-                        .collect()
-                })
+    // wasm has no spawnable threads: build the chunks inline (still exactly
+    // the same sprites, just sequentially)
+    let build = |ks: &[SpriteKey]| {
+        ks.iter()
+            .map(|(tex, rot, fx, fy, k)| {
+                let (kx, ky) = (f32::from_bits((k >> 32) as u32), f32::from_bits(*k as u32));
+                store
+                    .cached(tex)
+                    .and_then(|sp| prescale(sp, *rot as f32 / 1000.0, *fx, *fy, kx, ky))
+                    .map(|(p, ox, oy)| {
+                        let spans = opaque_spans(&p);
+                        std::sync::Arc::new((p, ox, oy, spans))
+                    })
             })
-            .collect();
-        hs.into_iter().map(|h| h.join().expect("prescale thread")).collect()
-    });
+            .collect::<Vec<_>>()
+    };
+    let built: Vec<Vec<Option<Sprite>>> = if cfg!(target_family = "wasm") {
+        keys.chunks(chunk).map(build).collect()
+    } else {
+        std::thread::scope(|sc| {
+            let hs: Vec<_> = keys
+                .chunks(chunk)
+                .map(|ks| {
+                    let build = build;
+                    sc.spawn(move || build(ks))
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().expect("prescale thread")).collect()
+        })
+    };
     for (k, b) in keys.into_iter().zip(built.into_iter().flatten()) {
         cache.insert(k, (now.into(), b));
     }
@@ -788,11 +803,24 @@ impl ColorEngine {
     }
 }
 
+/// Frame-time clock for PROFILE laps: seconds since process start.
+/// wasm32-unknown-unknown has no clock (Instant panics there): 0.0, and
+/// the laps are then all zero — PROFILE is a native-only debugging aid.
+#[cfg(not(target_family = "wasm"))]
+fn now_secs() -> f64 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
+}
+#[cfg(target_family = "wasm")]
+fn now_secs() -> f64 {
+    0.0
+}
+
 impl Renderer {
     /// Missing sheets degrade to hitbox-outline rendering (see SpriteStore::load).
-    pub fn new(assets_dir: &std::path::Path) -> Renderer {
+    pub fn new(assets: &Assets) -> Renderer {
         Renderer {
-            store: SpriteStore::load(assets_dir),
+            store: SpriteStore::load(assets),
             bg: None,
             fps: None,
             prescaled: Default::default(),
@@ -813,8 +841,13 @@ impl Renderer {
             ground: None,
             floor_line: None,
             ahead: { let (tx, rx) = std::sync::mpsc::channel(); (Default::default(), tx, rx) },
-            // 2 threads: big builds must not take the frame's own workers
-            ahead_pool: rayon::ThreadPoolBuilder::new().num_threads(2).build().expect("build pool"),
+            // 2 threads: big builds must not take the frame's own workers.
+            // wasm has no spawnable threads: None (misses build in-frame)
+            ahead_pool: if cfg!(target_family = "wasm") {
+                None
+            } else {
+                Some(rayon::ThreadPoolBuilder::new().num_threads(2).build().expect("build pool"))
+            },
             counters: (u64::MAX, Vec::new()),
             orbs: (0, Vec::new()),
             menu: None,
@@ -834,11 +867,19 @@ impl Renderer {
     /// Render one frame following player 0. Returns opaque RGBA,
     /// `FRAME_W * FRAME_H * 4` bytes (ready for Streamer::submit).
     pub fn draw(&mut self, level: &Level, table: &ObjectTable, sim: &Sim) -> Vec<u8> {
+        let mut out = Vec::with_capacity(FRAME_W as usize * FRAME_H as usize * 4);
+        self.draw_into(level, table, sim, &mut out);
+        out
+    }
+
+    /// `draw` into a caller-owned buffer (the browser build keeps one wasm
+    /// buffer alive instead of allocating a fresh frame each rAF).
+    pub fn draw_into(&mut self, level: &Level, table: &ObjectTable, sim: &Sim, out: &mut Vec<u8>) {
         let prof = std::env::var("PROFILE").is_ok();
-        let t_start = std::time::Instant::now();
+        let t_start = now_secs();
         // PROFILE: named laps, one line per frame
-        let mut laps: Vec<(&str, std::time::Instant)> = Vec::new();
-        let mut lap = |name: &'static str| if prof { laps.push((name, std::time::Instant::now())) };
+        let mut laps: Vec<(&str, f64)> = Vec::new();
+        let mut lap = |name: &'static str| if prof { laps.push((name, now_secs())) };
         let mut canvas = Pixmap::new(RW, RH).expect("static size");
         let view_w = RW as f32 / SCALE;
 
@@ -850,7 +891,7 @@ impl Renderer {
         let camx = px - view_w * 0.4 + cam_off.0;
         let static_y = self.fxs.cam.as_ref().and_then(|c| c.static_y);
         let camy = self.camera_y(sim, static_y) + cam_off.1;
-        let store_dir = self.store.dir().to_path_buf();
+        let store_dir = self.store.assets().clone();
         let gfx = self.gfx.get_or_insert_with(|| play_fx::Gfx::load(&store_dir));
         self.fxs.update(gfx, sim, level, (camx, camx + view_w, camy));
 
@@ -899,7 +940,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
         let bg_name = format!("game_bg_{bg_id:02}_001-uhd.png");
         if self.bg.as_ref().map(|(n, _)| n != &bg_name).unwrap_or(true) {
             // scaled once to its on-screen size (one tile = 512u)
-            let tex = Pixmap::load_png(self.store.dir().join(&bg_name)).ok().and_then(|t| {
+            let tex = self.store.png(&bg_name).and_then(|t| {
                 let s = 512.0 * SCALE / t.width() as f32;
                 let (w, h) = ((t.width() as f32 * s).round() as u32, (t.height() as f32 * s).round() as u32);
                 let mut p = Pixmap::new(w.max(1), h.max(1))?;
@@ -967,7 +1008,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
         let ka = |k: &str| level.header.ka.iter().find(|(kk, _)| kk == k).and_then(|(_, v)| v.parse::<u32>().ok());
         let gid = ka("kA7").unwrap_or(0).max(1);
         if self.ground.as_ref().map(|g| g.0) != Some(gid) {
-            let tile = Pixmap::load_png(self.store.dir().join(format!("groundSquare_{gid:02}_001-uhd.png"))).ok().and_then(|t| {
+            let tile = self.store.png(&format!("groundSquare_{gid:02}_001-uhd.png")).and_then(|t| {
                 // one tile = 128 units wide, like GD
                 let s = 128.0 * SCALE / t.width() as f32;
                 let (w, h) = ((t.width() as f32 * s).round() as u32, (t.height() as f32 * s).round() as u32);
@@ -1007,7 +1048,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
 
 
         lap("bg");
-        let t_bg = t_start.elapsed();
+        let t_bg = now_secs() - t_start;
         let skip_deco = std::env::var("SKIP_DECO").is_ok();
         if self.sorted_key != level.uid {
             let mut v: Vec<(f32, usize)> =
@@ -1020,7 +1061,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
             // font: the level's kA18 (0 = bigFont, n = gjFont<n>)
             let font_id: u32 = level.header.ka.iter().find(|(k, _)| k == "kA18").and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
             let fnt = if font_id == 0 { "bigFont-uhd.fnt".to_string() } else { format!("gjFont{font_id:02}-uhd.fnt") };
-            let level_font = fx::Font::load(&self.store.dir().join(fnt));
+            let level_font = fx::Font::load(self.store.assets(), &fnt);
             if let Some(font) = level_font.as_ref().or_else(|| self.gfx.as_ref().and_then(|g| g.font.as_ref())) {
                 for s in level.objects.iter().filter(|o| o.id == 914).filter_map(text_of) {
                     let name = format!("text:{s}");
@@ -1270,7 +1311,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
         }
 
         lap("list");
-        let t_list = t_start.elapsed();
+        let t_list = now_secs() - t_start;
         let keys = missing.clone();
         build_sprites(&mut self.prescaled, &mut self.store, missing, self.frame_no);
         let draws: Vec<(Sprite, i32, i32, bool, (u8, u8, u8, u8))> = draws
@@ -1285,7 +1326,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
             })
             .collect();
         lap("build");
-        let t_built = t_start.elapsed();
+        let t_built = now_secs() - t_start;
         // blit the draw list in parallel horizontal bands (order kept per band)
         {
             // small bands: dense rows (block fields) no longer leave cores idle
@@ -1367,7 +1408,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
         }
 
         lap("ground");
-        let t_objs = t_start.elapsed() - t_bg;
+        let t_objs = now_secs() - t_start - t_bg;
         // mirror portal: the whole world view flips left-right (HUD drawn after)
         // shortcut: instant flip; GD animates it over ~0.5 s
         if sim.mirror {
@@ -1382,7 +1423,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
         // players drawn later on the output frame are not tinted
         shader::apply(canvas.data_mut(), shader);
         if prof {
-            eprintln!("prof-objs: vis {} draws {} list {:?} build {:?} blit {:?}", vis.len(), draws.len(), t_list - t_bg, t_built - t_list, t_start.elapsed() - t_built);
+            eprintln!("prof-objs: vis {} draws {} list {:?} build {:?} blit {:?}", vis.len(), draws.len(), t_list - t_bg, t_built - t_list, now_secs() - t_start - t_built);
         }
         lap("shader");
         // hud: progress bar + %, fps, death overlay (attempt text + effect)
@@ -1416,12 +1457,12 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
                 (200, 200, 200),
             );
         }
-        let t_pl = t_start.elapsed() - t_bg - t_objs;
+        let t_pl = now_secs() - t_start - t_bg - t_objs;
 
 
         lap("hud");
         // a zoom trigger > 1 samples a smaller centered window (nearest)
-        let out = if zoom > 1.001 {
+        let zoomed = if zoom > 1.001 {
             let src = canvas.data();
             let mut out = vec![0u8; (FRAME_W * FRAME_H * 4) as usize];
             let ow = FRAME_W as usize;
@@ -1440,7 +1481,7 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
         };
         // trail + player at full output resolution, filtered: the 2x
         // nearest upscale above made them blocky
-        let mut outpm = Pixmap::from_vec(out, tiny_skia::IntSize::from_wh(FRAME_W, FRAME_H).expect("frame size"))
+        let mut outpm = Pixmap::from_vec(zoomed, tiny_skia::IntSize::from_wh(FRAME_W, FRAME_H).expect("frame size"))
             .expect("frame buffer");
         let k = FRAME_W as f32 / RW as f32;
         let (z, mirror) = (zoom.max(1.0), sim.mirror);
@@ -1568,15 +1609,16 @@ let to_screen = |wx: f32, wy: f32| -> (f32, f32) {
             }
         }
         lap("end");
-        let out = outpm.take();
+        let frame = outpm.take();
+        out.clear();
+        out.extend_from_slice(&frame);
         if prof {
             let mut t = t_start;
-            eprintln!("laps: {}", laps.iter().map(|(n, at)| { let d = *at - t; t = *at; format!("{n} {:.3}", d.as_secs_f64() * 1000.0) }).collect::<Vec<_>>().join(" "));
-            let t_all = t_start.elapsed();
+            eprintln!("laps: {}", laps.iter().map(|(n, at)| { let d = *at - t; t = *at; format!("{n} {:.3}", d * 1000.0) }).collect::<Vec<_>>().join(" "));
+            let t_all = now_secs() - t_start;
             eprintln!("prof: bg {:?} objs {:?} players {:?} upscale {:?} total {:?} builds {} cache {}",
                 t_bg, t_objs, t_pl, t_all - t_bg - t_objs - t_pl, t_all, BUILDS.with(|b| b.replace(0)), self.prescaled.len());
         }
-        out
     }
 }
 
@@ -1753,21 +1795,28 @@ impl Renderer {
         }
         let store = &self.store;
         let chunk = jobs.len().div_ceil(16).max(1);
-        let built: Vec<(String, Option<Pixmap>)> = std::thread::scope(|sc| {
-            let hs: Vec<_> = jobs
-                .chunks(chunk)
-                .map(|js| {
-                    sc.spawn(move || {
-                        js.iter()
-                            .map(|(key, p, pc, k, sec)| {
-                                (key.clone(), composite_build(store, p.as_deref(), pc.as_deref(), k, *sec))
-                            })
-                            .collect::<Vec<_>>()
+        // wasm has no spawnable threads: build the chunks inline
+        let built: Vec<(String, Option<Pixmap>)> = if cfg!(target_family = "wasm") {
+            jobs.chunks(chunk)
+                .flat_map(|js| js.iter().map(|(key, p, pc, k, sec)| (key.clone(), composite_build(store, p.as_deref(), pc.as_deref(), k, *sec))))
+                .collect()
+        } else {
+            std::thread::scope(|sc| {
+                let hs: Vec<_> = jobs
+                    .chunks(chunk)
+                    .map(|js| {
+                        sc.spawn(move || {
+                            js.iter()
+                                .map(|(key, p, pc, k, sec)| {
+                                    (key.clone(), composite_build(store, p.as_deref(), pc.as_deref(), k, *sec))
+                                })
+                                .collect::<Vec<_>>()
+                        })
                     })
-                })
-                .collect();
-            hs.into_iter().flat_map(|h| h.join().expect("composite thread")).collect()
-        });
+                    .collect();
+                hs.into_iter().flat_map(|h| h.join().expect("composite thread")).collect()
+            })
+        };
         for (key, pm) in built {
             if let Some(pm) = pm {
                 self.store.insert(&key, pm);
@@ -2030,11 +2079,12 @@ fn draw_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::Assets;
     use crate::level::parse_level;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
-    fn assets() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")
+    fn assets() -> Assets {
+        Assets::fs(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets"))
     }
 
     fn table() -> ObjectTable {
@@ -2107,10 +2157,19 @@ mod tests {
         assert_eq!(buf.len(), (FRAME_W * FRAME_H * 4) as usize);
         assert!(buf.iter().any(|&b| b != buf[0]), "frame is uniform");
 
-        // player 0: 40% from the left at ground level → pink dart icon
+        // player 0: 40% from the left at ground level → its icon is drawn
+        // there in the player color (the exact pixel differs per art source:
+        // gd-clone's icon is solid pink, RobTop's has white borders)
         // (16:9: camx = -256, camy = 160 → spawn (0,99) at (512, 470))
-        let (r8, g8, b8, a8) = pixel(&buf, 512, 470);
-        assert_eq!((r8, g8, b8, a8), (255, 45, 140, 255));
+        let mut primary = false;
+        for dx in 0..40 {
+            for dy in 0..40 {
+                if pixel(&buf, 492 + dx, 450 + dy) == (255, 45, 140, 255) {
+                    primary = true;
+                }
+            }
+        }
+        assert!(primary, "player icon's primary color not found at the spawn point");
 
         // block 1 at world x=60 (y=105): dark square_01 sprite over the bg
         let (br, bgc, bb, _) = pixel(&buf, 632, 500);

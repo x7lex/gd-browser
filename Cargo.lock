@@ -752,6 +752,7 @@ name = "gdrust"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "js-sys",
  "minifb",
  "rayon",
  "rfd",
@@ -759,6 +760,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tiny-skia",
+ "wasm-bindgen",
 ]
 
 [[package]]

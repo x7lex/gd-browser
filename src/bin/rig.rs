@@ -123,7 +123,7 @@ fn keep_in_view(sim: &mut Sim, pick: &Pick) {
 fn main() {
     let manifest = env!("CARGO_MANIFEST_DIR");
     let table = ObjectTable::load(std::path::Path::new(&format!("{manifest}/data/objects.json"))).unwrap();
-    let mut renderer = Renderer::new(&gdrust::assets::find_or_ask());
+    let mut renderer = Renderer::new(&gdrust::assets::Assets::fs(std::path::Path::new(&gdrust::assets::find_or_ask())));
     let level = showcase();
     let mut sim = Sim::new(&level, &table);
     let mut pick = Pick { mode: 0, mini: false, flip: false, speed: 1 };

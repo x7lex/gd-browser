@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use tiny_skia::Pixmap;
 
+use crate::assets::Assets;
+
 /// Minimal XML plist value (enough for cocos particle/anim files).
 #[derive(Debug, Clone)]
 pub enum Pv {
@@ -391,13 +393,15 @@ pub struct Font {
 }
 
 impl Font {
-    pub fn load(fnt: &std::path::Path) -> Option<Font> {
-        let text = std::fs::read_to_string(fnt).ok()?;
+    /// `fnt` is the font description's file name in the asset source; its
+    /// page (named inside the file) is read from the same source.
+    pub fn load(assets: &Assets, fnt: &str) -> Option<Font> {
+        let text = assets.text(fnt)?;
         let kv = |line: &str, k: &str| -> Option<String> {
             line.split_whitespace().find_map(|t| t.strip_prefix(&format!("{k}=")).map(|v| v.trim_matches('"').to_string()))
         };
         let page_name = text.lines().find(|l| l.starts_with("page ")).and_then(|l| kv(l, "file"))?;
-        let page = Pixmap::load_png(fnt.with_file_name(page_name)).ok()?;
+        let page = assets.png(&page_name)?;
         let line_h = text.lines().find(|l| l.starts_with("common ")).and_then(|l| kv(l, "lineHeight"))?.parse().ok()?;
         let mut glyphs = HashMap::new();
         for l in text.lines().filter(|l| l.starts_with("char ")) {

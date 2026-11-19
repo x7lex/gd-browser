@@ -259,7 +259,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     // the player's own Geometry Dash art (RobTop's, never shipped): asked
     // for on the first run, before anything slow happens
-    let assets = gdrust::assets::find_or_ask();
+    let assets: std::path::PathBuf = gdrust::assets::find_or_ask();
+    let art = gdrust::assets::Assets::fs(&assets);
     let id: u32 = args.get(1).map(|a| a.parse().expect("level id must be a number")).unwrap_or(149992717);
     let table =
         ObjectTable::load(std::path::Path::new(&format!("{manifest}/data/objects.json"))).unwrap();
@@ -335,7 +336,7 @@ fn main() {
         });
     }
 
-    let mut renderer = Renderer::new(&assets);
+    let mut renderer = Renderer::new(&art);
 
     let mut sim = Sim::new(&level, &table);
     let mut pure = std::env::var("DEMO_PURE").is_ok() || m.frames.is_empty();

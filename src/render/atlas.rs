@@ -1,8 +1,9 @@
 //! Texture atlas: TexturePacker/cocos2d format-3 plist parsing + lazy PNG decode + sprite extraction.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use tiny_skia::Pixmap;
+
+use crate::assets::Assets;
 
 /// One plist frame. `w`/`h` are the natural (trimmed) sprite dims; for rotated
 /// frames the sheet stores the region transposed (width h, height w) with the
@@ -23,7 +24,8 @@ pub(crate) struct Frame {
 }
 
 struct Sheet {
-    png: PathBuf,
+    /// the sheet png's file name (in the asset source)
+    png: String,
     frames: HashMap<String, Frame>,
     atlas: Option<Pixmap>,
     /// sheet px per world unit (uhd = 4, hd = 2)
@@ -34,7 +36,7 @@ pub struct SpriteStore {
     sheets: Vec<Sheet>,
     cache: HashMap<String, Pixmap>,
     misses: HashSet<String>,
-    dir: PathBuf,
+    assets: Assets,
 }
 
 /// (sheet name, sheet px per unit)
@@ -60,32 +62,39 @@ const SHEETS: &[(&str, f32)] = &[
     ("icons/swing_01-uhd", 4.0),
 ];
 
+/// The sheets the renderer knows, in load order (asset names to expose to
+/// the browser build).
+pub fn sheet_list() -> &'static [(&'static str, f32)] {
+    SHEETS
+}
+
 impl SpriteStore {
     /// Missing/undecodable sheets are skipped: the renderer degrades to
     /// hitbox outlines instead of failing.
-    pub fn load(dir: &Path) -> SpriteStore {
-        // a full game install keeps sheets under Resources/; resolve it so
-        // the install folder works directly
-        let resources = dir.join("Resources");
-        let dir = if resources.join("GJ_GameSheet-uhd.plist").exists() {
-            resources
-        } else {
-            dir.to_path_buf()
-        };
+    pub fn load(assets: &Assets) -> SpriteStore {
         let sheets = SHEETS
             .iter()
             .filter_map(|(name, scale)| {
-                let text = std::fs::read_to_string(dir.join(format!("{name}.plist"))).ok()?;
-                let png = dir.join(format!("{name}.png"));
-                Some(Sheet { png, frames: parse_plist(&text), atlas: None, scale: *scale })
+                let text = assets.text(&format!("{name}.plist"))?;
+                Some(Sheet { png: format!("{name}.png"), frames: parse_plist(&text), atlas: None, scale: *scale })
             })
             .collect();
-        SpriteStore { sheets, cache: HashMap::new(), misses: HashSet::new(), dir }
+        SpriteStore { sheets, cache: HashMap::new(), misses: HashSet::new(), assets: assets.clone() }
     }
 
-    /// Resources dir (for standalone textures like the backgrounds).
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    /// The asset source behind the store (backgrounds, fonts, effects).
+    pub fn assets(&self) -> &Assets {
+        &self.assets
+    }
+
+    /// A text file from the asset source.
+    pub fn text(&self, name: &str) -> Option<String> {
+        self.assets.text(name)
+    }
+
+    /// A decoded png from the asset source.
+    pub fn png(&self, name: &str) -> Option<Pixmap> {
+        self.assets.png(name)
     }
 
     /// Extracted sprite (un-rotated, un-trimmed to source size) for a texture
@@ -104,7 +113,7 @@ impl SpriteStore {
                     .cloned();
                 let Some(frame) = frame else { continue };
                 if sheet.atlas.is_none() {
-                    sheet.atlas = Pixmap::load_png(&sheet.png).ok();
+                    sheet.atlas = self.assets.png(&sheet.png);
                 }
                 if let Some(pm) = sheet.atlas.as_ref().and_then(|a| extract(a, &frame)) {
                     self.cache.insert(name.to_string(), pm);
@@ -274,9 +283,11 @@ fn parse_frame(dict: &str) -> Option<Frame> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::Assets;
 
-    fn assets() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")
+    fn assets() -> Assets {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        Assets::fs(&dir)
     }
 
     #[test]

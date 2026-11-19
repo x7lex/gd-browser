@@ -51,8 +51,8 @@ fn main() {
             (level, m, format!("{manifest}/audio/482872.mp3"))
         }
     };
-    let assets = gdrust::assets::find_or_ask();
-    let mut renderer = Renderer::new(std::path::Path::new(&assets));
+    let assets = gdrust::assets::Assets::fs(std::path::Path::new(&gdrust::assets::find_or_ask()));
+    let mut renderer = Renderer::new(&assets);
 
     let video = format!("{out}.video.mp4");
     let mut ff = Command::new("ffmpeg")
