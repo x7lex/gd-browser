@@ -13,8 +13,9 @@ copies everything the page serves:
     assets/...                      game art, when a GD install is known
     levels/ audio/ macros/          levels, songs, macros
 
-usage: python3 tools/web_pack.py [--serve] ; --serve also starts a local
-server on http://localhost:8000 afterwards.
+usage: python3 tools/web_pack.py [--serve] [--out DIR]
+--serve also starts a local server on http://localhost:8000 afterwards.
+--out packs somewhere else (trunk's pre_build hook uses .web-pack/).
 """
 import argparse
 import json
@@ -36,7 +37,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--serve', action='store_true', help='serve dist/ on :8000 after packing')
     ap.add_argument('--skip-build', action='store_true', help='reuse web/pkg and the web_index output')
+    ap.add_argument('--out', default='dist', help='output directory (default: dist)')
     args = ap.parse_args()
+    global DIST
+    DIST = os.path.join(ROOT, args.out)
 
     if not args.skip_build:
         # the engine: wasm-pack builds only the lib (--lib), so the native
@@ -47,7 +51,7 @@ def main():
 
     if os.path.isdir(DIST):
         shutil.rmtree(DIST)
-    os.makedirs(DIST)
+    os.makedirs(DIST, exist_ok=True)
 
     # the app + the engine
     for f in ('index.html', 'app.js', 'worker.js'):
@@ -101,8 +105,8 @@ def main():
 
     mb = lambda n: f'{n / 1e6:.1f} MB'
     total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(DIST) for f in fs)
-    print(f'packed dist/: {len(manifest["levels"])} levels, {len(manifest["assets"])} art files, '
-          f'{len(copied)} files, {mb(total)} total')
+    print(f'packed {os.path.relpath(DIST, ROOT)}/: {len(manifest["levels"])} levels, '
+          f'{len(manifest["assets"])} art files, {len(copied)} files, {mb(total)} total')
 
     if args.serve:
         os.chdir(DIST)

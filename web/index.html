@@ -4,6 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>gd-browser — Geometry Dash in WebAssembly</title>
+<!-- Trunk copy hooks: when trunk serve/build drives tools/web_pack.py, the
+     packed files land next to this page in .web-pack/ and trunk copies them
+     into dist/ verbatim. Browsers ignore these unknown rel values. -->
+<link data-trunk rel="copy-file" href="app.js">
+<link data-trunk rel="copy-file" href="worker.js">
+<link data-trunk rel="copy-file" href="levels.json">
+<link data-trunk rel="copy-file" href="assets.json">
+<link data-trunk rel="copy-dir" href="pkg">
+<link data-trunk rel="copy-dir" href="data">
+<link data-trunk rel="copy-dir" href="levels">
+<link data-trunk rel="copy-dir" href="assets">
+<link data-trunk rel="copy-dir" href="audio">
+<link data-trunk rel="copy-dir" href="macros">
 <style>
   :root {
     --bg: #0d0e16;

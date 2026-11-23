@@ -3,12 +3,7 @@ node_modules/
 bridge/node_modules
 /tmp_*.png
 *.snapshot
-audio/
-levels/
-assets/
-analysis/
 dist/
+.web-pack/
 __pycache__/
-Resources/
 .DS_Store
-assets

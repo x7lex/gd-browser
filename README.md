@@ -6,7 +6,7 @@ real game's look, and a bot that solves levels on its own.
 **gd-browser** (see [web/](web/) and [tools/web_pack.py](tools/web_pack.py)):
 the same engine compiled to WebAssembly, playable in the browser — levels from
 `levels/`, the bot's own solve for levels without a recording, game art from
-your own GD install.
+`assets/` (or your own GD install).
 
 ## Install
 
@@ -46,8 +46,13 @@ You can also type a level ID in the terminal to queue it: it loads in the backgr
 ## Browser (gd-browser)
 
 ```sh
-python3 tools/web_pack.py --serve   # builds dist/ and serves http://localhost:8000
+trunk serve                        # packs dist/ and serves http://localhost:8080
+# or
+python3 tools/web_pack.py --serve  # builds dist/ and serves http://localhost:8000
 ```
+
+`trunk serve` runs the same packer through a hook in [Trunk.toml](Trunk.toml);
+the copy hooks are in [web/index.html](web/index.html).
 
 The same engine as WebAssembly (`wasm-pack build --release --target web`), the
 same behavior: 240 Hz sim ticks from wall clock, deaths restart the attempt,
@@ -66,12 +71,10 @@ Songs play through Web Audio at the sim's song cue (level offset, song
 triggers), restarted at the exact sample like the native demo; GD's death
 sound plays when it is among the art.
 
-**Game art**: nothing of RobTop's is bundled, here or natively. When the
-packer finds a Geometry Dash install (`DEMO_ASSETS`, `assets/`, or the
-remembered folder) the needed sheets are copied into `dist/assets/` and the
-page loads them with a progress bar. Otherwise levels render as hitbox
-outlines, and the page's *load GD folder* picker reads the art from your own
-install at runtime — matched by name, never uploaded anywhere.
+**Game art**: the needed sheets in `assets/` are copied into `dist/assets/`
+and the page loads them with a progress bar. Without them levels render as
+hitbox outlines; the page's *load GD folder* picker reads art from your own
+Geometry Dash install at runtime — matched by name, never uploaded anywhere.
 
 `node web/smoke.mjs` runs the whole wasm stack headlessly (boot, GRIEF +
 macro replay, render, deaths, manual, solve → set_macro → 100%).
